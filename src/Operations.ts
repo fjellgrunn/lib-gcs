@@ -175,8 +175,15 @@ export const createOperations = <
         // Finder opted-in: return as-is
         return finderResult as FindOperationResult<V>;
       } else {
-        // Legacy finder: wrap array in FindOperationResult
-        const items = (finderResult || []) as V[];
+        // Legacy finder: return value must be an array
+        if (typeof finderResult !== 'undefined' && finderResult !== null && !Array.isArray(finderResult)) {
+          throw new Error(
+            `Finder '${finder}' returned invalid result. ` +
+            `Expected an array (legacy mode) or FindOperationResult with { items, metadata }.`
+          );
+        }
+
+        const items = (finderResult ?? []) as V[];
         return {
           items,
           metadata: {

@@ -1,11 +1,102 @@
 import { Storage } from '@google-cloud/storage';
-import { AllOperationResult, AllOptions, Coordinate, Item, ItemQuery, LocKeyArray } from '@fjell/types';
+import { AllOperationResult, AllOptions, CompoundCondition, Condition, Coordinate, Item, ItemQuery, LocKeyArray, OrderBy } from '@fjell/types';
 import { PathBuilder } from '../PathBuilder';
 import { FileProcessor } from '../FileProcessor';
 import { Options } from '../Options';
 import GCSLogger from '../logger';
 
 const logger = GCSLogger.get('ops', 'all');
+
+const isNonNegativeInteger = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 0;
+
+const validatePaginationValue = (value: unknown, name: 'limit' | 'offset'): void => {
+  if (typeof value === 'undefined' || value === null) {
+    return;
+  }
+
+  if (!isNonNegativeInteger(value)) {
+    throw new Error(
+      `Invalid pagination ${name} for all operation. ` +
+      `Expected a non-negative integer, received: ${String(value)}`
+    );
+  }
+};
+
+const compareValues = (a: unknown, b: unknown): number => {
+  // Keep null/undefined values at the end for deterministic ordering.
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+
+  if (a instanceof Date && b instanceof Date) {
+    return a.getTime() - b.getTime();
+  }
+
+  if (typeof a === 'string' && typeof b === 'string') {
+    return a.localeCompare(b);
+  }
+
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+};
+
+const valuesEqual = (a: unknown, b: unknown): boolean => {
+  if (a instanceof Date && b instanceof Date) {
+    return a.getTime() === b.getTime();
+  }
+
+  return a === b;
+};
+
+const evaluateCondition = (item: any, condition: Condition): boolean => {
+  const itemValue = (item as any)[condition.column];
+  const conditionValue = condition.value;
+
+  switch (condition.operator) {
+    case '==':
+      return valuesEqual(itemValue, conditionValue);
+    case '!=':
+      return !valuesEqual(itemValue, conditionValue);
+    case '>':
+      return itemValue > conditionValue;
+    case '>=':
+      return itemValue >= conditionValue;
+    case '<':
+      return itemValue < conditionValue;
+    case '<=':
+      return itemValue <= conditionValue;
+    case 'in':
+      return Array.isArray(conditionValue) && conditionValue.some(value => valuesEqual(itemValue, value));
+    case 'not-in':
+      return Array.isArray(conditionValue) && !conditionValue.some(value => valuesEqual(itemValue, value));
+    case 'array-contains':
+      return Array.isArray(itemValue) && itemValue.some(value => valuesEqual(value, conditionValue));
+    case 'array-contains-any':
+      return Array.isArray(itemValue) &&
+        Array.isArray(conditionValue) &&
+        conditionValue.some(value => itemValue.some(itemElement => valuesEqual(itemElement, value)));
+    default:
+      return false;
+  }
+};
+
+const evaluateCompoundCondition = (item: any, compound: CompoundCondition): boolean => {
+  const matches = compound.conditions.map((condition) => {
+    if ('compoundType' in condition) {
+      return evaluateCompoundCondition(item, condition);
+    }
+
+    return evaluateCondition(item, condition);
+  });
+
+  if (compound.compoundType === 'OR') {
+    return matches.some(Boolean);
+  }
+
+  return matches.every(Boolean);
+};
 
 /**
  * Get all items matching a query from GCS with pagination support
@@ -132,7 +223,12 @@ export async function all<
     // Apply query filters if provided (but NOT pagination yet)
     let filtered = items;
 
-    if (query && (query as any).filter) {
+    // Canonical ItemQuery shape
+    if (query?.compoundCondition) {
+      filtered = filtered.filter(item => evaluateCompoundCondition(item, query.compoundCondition as CompoundCondition));
+    }
+    // Backward compatibility for legacy query shape
+    else if (query && (query as any).filter) {
       filtered = filtered.filter(item => {
         for (const [key, value] of Object.entries((query as any).filter)) {
           if ((item as any)[key] !== value) {
@@ -144,14 +240,18 @@ export async function all<
     }
 
     // Apply sorting if provided
-    if (query && (query as any).sort) {
+    const orderBy: Array<OrderBy | { field: string; direction?: 'asc' | 'desc' }> | undefined =
+      query?.orderBy ?? (query as any)?.sort;
+    if (orderBy && orderBy.length > 0) {
       filtered.sort((a, b) => {
-        for (const { field, direction } of (query as any).sort) {
+        for (const { field, direction } of orderBy) {
           const aVal = (a as any)[field];
           const bVal = (b as any)[field];
-          
-          if (aVal < bVal) return direction === 'asc' ? -1 : 1;
-          if (aVal > bVal) return direction === 'asc' ? 1 : -1;
+          const comparison = compareValues(aVal, bVal);
+
+          if (comparison !== 0) {
+            return direction === 'desc' ? -comparison : comparison;
+          }
         }
         return 0;
       });
@@ -163,6 +263,9 @@ export async function all<
     // Determine effective limit/offset (allOptions takes precedence over query)
     const effectiveLimit = allOptions?.limit ?? query?.limit;
     const effectiveOffset = allOptions?.offset ?? query?.offset ?? 0;
+
+    validatePaginationValue(effectiveLimit, 'limit');
+    validatePaginationValue(effectiveOffset, 'offset');
 
     logger.default('Pagination', { total, effectiveLimit, effectiveOffset });
 
