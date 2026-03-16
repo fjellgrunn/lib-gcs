@@ -91,4 +91,114 @@ describe('createOperations', () => {
     expect(typeof operations.facet).toBe('function');
     expect(typeof operations.allFacet).toBe('function');
   });
+
+  it('should reject invalid finder return shape', async () => {
+    const mockStorage = {} as any;
+    const coordinate = createCoordinate(['test']);
+
+    const definition: Definition<any, any> = {
+      coordinate,
+      bucketName: 'test-bucket',
+      directoryPaths: ['tests'],
+      basePath: '',
+      options: {
+        bucketName: 'test-bucket',
+        mode: 'full',
+        finders: {
+          badFinder: async () => ({ invalid: true })
+        }
+      } as any
+    };
+
+    const operations = createOperations(mockStorage, definition);
+
+    await expect(
+      operations.find('badFinder', {}, [])
+    ).rejects.toThrow('returned invalid result');
+  });
+
+  it('should return finder result as-is when finder returns FindOperationResult', async () => {
+    const mockStorage = {} as any;
+    const coordinate = createCoordinate(['test']);
+
+    const definition: Definition<any, any> = {
+      coordinate,
+      bucketName: 'test-bucket',
+      directoryPaths: ['tests'],
+      basePath: '',
+      options: {
+        bucketName: 'test-bucket',
+        mode: 'full',
+        finders: {
+          pagedFinder: async () => ({
+            items: [{ kt: 'test', pk: '1', name: 'A' }],
+            metadata: {
+              total: 10,
+              returned: 1,
+              offset: 0,
+              limit: 1,
+              hasMore: true
+            }
+          })
+        }
+      } as any
+    };
+
+    const operations = createOperations(mockStorage, definition);
+    const result = await operations.find('pagedFinder', {}, []);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.metadata.total).toBe(10);
+    expect(result.metadata.hasMore).toBe(true);
+  });
+
+  it('should treat undefined legacy finder result as empty array', async () => {
+    const mockStorage = {} as any;
+    const coordinate = createCoordinate(['test']);
+
+    const definition: Definition<any, any> = {
+      coordinate,
+      bucketName: 'test-bucket',
+      directoryPaths: ['tests'],
+      basePath: '',
+      options: {
+        bucketName: 'test-bucket',
+        mode: 'full',
+        finders: {
+          emptyFinder: async () => undefined
+        }
+      } as any
+    };
+
+    const operations = createOperations(mockStorage, definition);
+    const result = await operations.find('emptyFinder', {}, []);
+
+    expect(result.items).toEqual([]);
+    expect(result.metadata.total).toBe(0);
+    expect(result.metadata.returned).toBe(0);
+    expect(result.metadata.hasMore).toBe(false);
+  });
+
+  it('should throw when finder does not exist', async () => {
+    const mockStorage = {} as any;
+    const coordinate = createCoordinate(['test']);
+
+    const definition: Definition<any, any> = {
+      coordinate,
+      bucketName: 'test-bucket',
+      directoryPaths: ['tests'],
+      basePath: '',
+      options: {
+        bucketName: 'test-bucket',
+        mode: 'full',
+        finders: {}
+      } as any
+    };
+
+    const operations = createOperations(mockStorage, definition);
+
+    await expect(
+      operations.find('missingFinder', {}, [])
+    ).rejects.toThrow('missingFinder');
+  });
 });

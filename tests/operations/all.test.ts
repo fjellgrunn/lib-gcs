@@ -129,6 +129,57 @@ describe('all operation', () => {
     expect(result.metadata.total).toBe(3);
   });
 
+  it('should reject negative limit values', async () => {
+    mockBucket.getFiles.mockResolvedValue([[]]);
+
+    await expect(
+      all<TestItem, 'test'>(
+        mockStorage,
+        bucketName,
+        { limit: -1 },
+        undefined,
+        pathBuilder,
+        fileProcessor,
+        coordinate,
+        { bucketName, mode: 'full' } as any
+      )
+    ).rejects.toThrow('Invalid pagination limit for all operation');
+  });
+
+  it('should reject negative offset values', async () => {
+    mockBucket.getFiles.mockResolvedValue([[]]);
+
+    await expect(
+      all<TestItem, 'test'>(
+        mockStorage,
+        bucketName,
+        { offset: -1 },
+        undefined,
+        pathBuilder,
+        fileProcessor,
+        coordinate,
+        { bucketName, mode: 'full' } as any
+      )
+    ).rejects.toThrow('Invalid pagination offset for all operation');
+  });
+
+  it('should reject non-integer pagination values', async () => {
+    mockBucket.getFiles.mockResolvedValue([[]]);
+
+    await expect(
+      all<TestItem, 'test'>(
+        mockStorage,
+        bucketName,
+        { limit: 1.5 as any },
+        undefined,
+        pathBuilder,
+        fileProcessor,
+        coordinate,
+        { bucketName, mode: 'full' } as any
+      )
+    ).rejects.toThrow('Invalid pagination limit for all operation');
+  });
+
   it('should throw error if file count exceeds maxScanFiles', async () => {
     const mockFiles = Array.from({ length: 1500 }, (_, i) => ({
       name: `test/test-${i}.json`,
