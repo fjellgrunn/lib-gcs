@@ -1,6 +1,6 @@
 {
   "name": "@fjell/lib-gcs",
-  "version": "4.4.38-dev.0",
+  "version": "4.4.38",
   "type": "module",
   "keywords": [
     "library",
